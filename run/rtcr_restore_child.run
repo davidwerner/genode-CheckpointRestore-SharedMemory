@@ -12,6 +12,7 @@ create_boot_directory
 
 install_config {
 <config>
+	<affinity-space width="4" height="1"/>
 	<parent-provides>
 		<service name="PD"/>
 		<service name="CPU"/>
@@ -31,6 +32,7 @@ install_config {
 		<provides><service name="Timer"/></provides>
 	</start>
 	<start name="target_restorer-tester">
+		<affinity xpos="0" width="4"/>
 		<resource name="RAM" quantum="1G"/>
 	</start>
 </config>}
@@ -41,7 +43,9 @@ install_config {
 
 build_boot_image { core init timer target_restorer-tester sheep_counter arbitrary_child }
 
-append qemu_args " -nographic "
+append qemu_args " -nographic -smp 4"
+
+source ${genode_dir}/repos/profiler/run/profiler.inc
 
 #run_genode_until "3 sheeps.*\n" 10
 run_genode_until forever

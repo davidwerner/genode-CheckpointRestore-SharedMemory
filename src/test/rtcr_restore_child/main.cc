@@ -40,7 +40,7 @@ struct Rtcr::Main
 		timer.msleep(3000);
 
 		Target_state ts(env, heap);
-		Checkpointer ckpt(heap, child, ts);
+		Checkpointer ckpt(heap, child, ts, timer, 2);
 		ckpt.checkpoint();
 
 		Target_child child_restored { env, heap, parent_services, "sheep_counter", 0 };

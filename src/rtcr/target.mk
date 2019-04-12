@@ -8,7 +8,8 @@ SRC_CC += main.cc \
           log_session.cc \
           rm_session.cc \
           timer_session.cc \
-          target_child.cc
+          target_child.cc \
+	  worker.cc
           
 LIBS   += base
 

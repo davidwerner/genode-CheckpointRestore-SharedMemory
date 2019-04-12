@@ -27,12 +27,16 @@ namespace Rtcr {
 	// Forward declaration
 	class Checkpointer;
 	class Restorer;
+	class Worker;
+	class Worker_pool;
 }
 
 class Rtcr::Target_state
 {
 	friend class Checkpointer;
 	friend class Restorer;
+	friend class Worker;
+	friend class Worker_pool;
 	friend class Main;
 
 private:

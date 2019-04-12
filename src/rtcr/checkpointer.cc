@@ -9,6 +9,8 @@
 #include <base/internal/cap_map.h>
 #include <base/internal/cap_alloc.h>
 
+#include "worker.h"
+
 using namespace Rtcr;
 
 /* removes all elements from a list and frees their memory */
@@ -487,6 +489,7 @@ void Checkpointer::_prepare_attached_regions(Genode::List<Stored_attached_region
 				trans_info = new (_alloc) Dataspace_translation_info(
 						stored_info->memory_content, child_info->attached_ds_cap, child_info->size);
 				_dataspace_translations.insert(trans_info);
+				++_ds_trans_size;
 			}
 		}
 
@@ -663,6 +666,7 @@ void Checkpointer::_prepare_ram_dataspaces(Genode::List<Stored_ram_dataspace_inf
 			trans_info = new (_alloc) Dataspace_translation_info(
 					stored_info->memory_content, child_info->cap, child_info->size);
 			_dataspace_translations.insert(trans_info);
+			++_ds_trans_size;
 		}
 
 		child_info = child_info->next();
@@ -1418,6 +1422,57 @@ void Checkpointer::_checkpoint_dataspaces()
 }
 
 
+void Checkpointer::_checkpoint_dataspaces_chunk(Genode::size_t chunk_start, Genode::size_t chunk_size)
+{
+	if(verbose_debug) Genode::log("Ckpt::\033[33m", __func__, "\033[0m(...)");
+
+
+	Dataspace_translation_info *memory_info = _dataspace_translations.first();
+
+	while(memory_info && (chunk_start>0))
+	{
+		memory_info = memory_info->next();
+		--chunk_start;
+	}
+
+	while(memory_info && (chunk_size>0))
+	{
+		if(!memory_info->processed)
+		{
+			// Resolve managed dataspace of the incremental checkpointing mechanism
+			Simplified_managed_dataspace_info *smd_info = _managed_dataspaces.first();
+			if(smd_info) smd_info = smd_info->find_by_badge(memory_info->resto_ds_cap.local_name());
+			// Dataspace is managed
+			if(smd_info)
+			{
+				Simplified_managed_dataspace_info::Simplified_designated_ds_info *sdd_info =
+						smd_info->designated_dataspaces.first();
+				while(sdd_info)
+				{
+					Genode::log("checkpoint managed dataspace...");
+					if(sdd_info->modified)
+						_checkpoint_dataspace_content(memory_info->ckpt_ds_cap, sdd_info->dataspace_cap, sdd_info->addr, sdd_info->size);
+
+					sdd_info = sdd_info->next();
+				}
+
+			}
+			// Dataspace is not managed
+			else
+			{
+				Genode::log("checkpoint regular dataspace...");
+				_checkpoint_dataspace_content(memory_info->ckpt_ds_cap, memory_info->resto_ds_cap, 0, memory_info->size);
+			}
+
+			memory_info->processed = true;
+		}
+
+		memory_info = memory_info->next();
+		--chunk_size;
+	}
+}
+
+
 void Checkpointer::_checkpoint_dataspace_content(Genode::Dataspace_capability dst_ds_cap,
 		Genode::Dataspace_capability src_ds_cap, Genode::addr_t dst_offset, Genode::size_t size)
 {
@@ -1436,11 +1491,13 @@ void Checkpointer::_checkpoint_dataspace_content(Genode::Dataspace_capability ds
 }
 
 
-Checkpointer::Checkpointer(Genode::Allocator &alloc, Target_child &child, Target_state &state)
+Checkpointer::Checkpointer(Genode::Allocator &alloc, Target_child &child, Target_state &state, Timer::Connection &timer, unsigned num_worker)
 :
-	_alloc(alloc), _child(child), _state(state)
+	_alloc(alloc), _child(child), _state(state), _ds_trans_size(0), _timer(timer), _num_worker(num_worker)
 {
 	if(verbose_debug) Genode::log("\033[33m", "Checkpointer", "\033[0m(...)");
+
+	_pool = new (_alloc) Worker_pool(_alloc,_state, *this, _num_worker);
 }
 
 Checkpointer::~Checkpointer()
@@ -1456,6 +1513,8 @@ Checkpointer::~Checkpointer()
 
 void Checkpointer::checkpoint()
 {
+	PROFILE_SCOPE("checkpoint()", "lightgreen", _timer)
+
 	using Genode::log;
 	if(verbose_debug) Genode::log("Ckpt::\033[33m", __func__, "\033[0m()");
 
@@ -1464,7 +1523,7 @@ void Checkpointer::checkpoint()
 
 	// Create mapping of badge to kcap
 	_kcap_mappings = _create_kcap_mappings();
-
+/*
 	if(verbose_debug)
 	{
 		Genode::log("Capability map:");
@@ -1476,7 +1535,7 @@ void Checkpointer::checkpoint()
 			info = info->next();
 		}
 	}
-
+*/
 	// Create a list of region map dataspaces which are known to child
 	// These dataspaces are ignored when creating copy dataspaces
 	// For new intercepted sessions which trade managed dataspaces between child and themselves,
@@ -1484,7 +1543,7 @@ void Checkpointer::checkpoint()
 	Genode::List<Rm_session_component> *rm_sessions = nullptr;
 	if(_child.custom_services().rm_root) rm_sessions = &_child.custom_services().rm_root->session_infos();
 	_region_maps = _create_region_map_dataspaces_list(_child.custom_services().pd_root->session_infos(), rm_sessions);
-
+/*
 	if(verbose_debug)
 	{
 		Genode::log("Region map dataspaces:");
@@ -1495,19 +1554,19 @@ void Checkpointer::checkpoint()
 			info = info->next();
 		}
 	}
-
+*/
 	// Prepare state lists
 	// implicitly _copy_dataspaces modified with the child's currently known dataspaces and copy dataspaces
 	_prepare_ram_sessions(_state._stored_ram_sessions, _child.custom_services().ram_root->session_infos());
 	_prepare_pd_sessions(_state._stored_pd_sessions, _child.custom_services().pd_root->session_infos());
 	_prepare_cpu_sessions(_state._stored_cpu_sessions, _child.custom_services().cpu_root->session_infos());
-	if(_child.custom_services().rm_root)
+	if(_child.custom_services().rm_root)	
 		_prepare_rm_sessions(_state._stored_rm_sessions, _child.custom_services().rm_root->session_infos());
 	if(_child.custom_services().log_root)
 		_prepare_log_sessions(_state._stored_log_sessions, _child.custom_services().log_root->session_infos());
 	if(_child.custom_services().timer_root)
 		_prepare_timer_sessions(_state._stored_timer_sessions, _child.custom_services().timer_root->session_infos());
-
+/*
 	if(verbose_debug)
 	{
 		Genode::log("Dataspaces to checkpoint:");
@@ -1518,10 +1577,10 @@ void Checkpointer::checkpoint()
 			info = info->next();
 		}
 	}
-
+*/
 	// Create a list of managed dataspaces
 	_create_managed_dataspace_list(_child.custom_services().ram_root->session_infos());
-
+/*
 	if(verbose_debug)
 	{
 		Genode::log("Managed dataspaces:");
@@ -1544,17 +1603,35 @@ void Checkpointer::checkpoint()
 			smd_info = smd_info->next();
 		}
 	}
-
+*/
 	// Detach all designated dataspaces
 	_detach_designated_dataspaces(_child.custom_services().ram_root->session_infos());
 
 	// Copy child dataspaces' content and to stored dataspaces' content
-	_checkpoint_dataspaces();
+	//_checkpoint_dataspaces();
 
-	if(verbose_debug) Genode::log(_child);
-	if(verbose_debug) Genode::log(_state);
+	
+	Genode::size_t chunk_size1 = _ds_trans_size / 2;
+
+	Genode::size_t chunk_size2 = chunk_size1 + (_ds_trans_size % 2);
+
+	Job *job1 = new (_alloc) Job(0, 0, chunk_size1);
+	Job *job2 = new (_alloc) Job(1, chunk_size1, chunk_size2);
+
+	_pool->add_job(job2);
+	_pool->add_job(job1);
+
+	_pool->start_workers();
+	_pool->join_workers();
+
+	//_checkpoint_dataspaces_chunk(0, chunk_size1);
+	//_checkpoint_dataspaces_chunk(chunk_size1, chunk_size2);
+
+	//if(verbose_debug) Genode::log(_child);
+	//if(verbose_debug) Genode::log(_state);
 
 	// Clean up
+	_ds_trans_size = 0;
 	_destroy_list(_kcap_mappings);
 	_destroy_list(_dataspace_translations);
 	_destroy_list(_region_maps);

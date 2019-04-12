@@ -19,10 +19,17 @@
 #include "util/dataspace_translation_info.h"
 #include "util/ref_badge_info.h"
 #include "util/simplified_managed_dataspace_info.h"
+#include "worker.h"
+
+/* Profiler includes */
+#include <util/profiler.h>
 
 namespace Rtcr {
 	class Checkpointer;
 
+	//class Worker;
+	//class Worker_pool;
+	struct Job;
 	constexpr bool checkpointer_verbose_debug = false;
 }
 
@@ -30,6 +37,10 @@ namespace Rtcr {
 class Rtcr::Checkpointer
 {
 private:
+
+	friend class Rtcr::Worker;
+	friend class Rtcr::Worker_pool;
+	//friend class Rtcr::Job;
 
 	/**
 	 * Enable log output for debugging
@@ -56,12 +67,19 @@ private:
 	 * Mapping to find a copy dataspace for a given original dataspace badge
 	 */
 	Genode::List<Dataspace_translation_info> _dataspace_translations;
+	Genode::size_t _ds_trans_size;
 	/**
 	 * List of dataspace badges which are (known) managed dataspaces
 	 * These dataspaces are not needed to be copied
 	 */
 	Genode::List<Ref_badge_info>            _region_maps;
 	Genode::List<Simplified_managed_dataspace_info> _managed_dataspaces;
+
+	Timer::Connection &_timer;
+
+    unsigned _num_worker;
+    
+	Worker_pool	*_pool;
 
 
 	template<typename T>
@@ -152,8 +170,10 @@ private:
 	void _checkpoint_dataspace_content(Genode::Dataspace_capability dst_ds_cap, Genode::Dataspace_capability src_ds_cap,
 			Genode::addr_t dst_offset, Genode::size_t size);
 
+	void _checkpoint_dataspaces_chunk(Genode::size_t chunk_start, Genode::size_t chunk_size);
+
 public:
-	Checkpointer(Genode::Allocator &alloc, Target_child &child, Target_state &state);
+	Checkpointer(Genode::Allocator &alloc, Target_child &child, Target_state &state, Timer::Connection &timer, unsigned num_worker);
 	~Checkpointer();
 
 	/**
